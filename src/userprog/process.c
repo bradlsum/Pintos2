@@ -17,40 +17,70 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
+#include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (struct process *p, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
 tid_t
-process_execute (const char *file_name) 
+process_execute (const char *args) 
 {
-  char *fn_copy;
+  char *arg_copy;
   tid_t tid;
+
+  // Make a copy of FILE_NAME.
+  // TODO
+  struct process *p = malloc(sizeof(struct process));
+  list_init(&p->args);
+  
+  sema_init(&p->on_load, 0);
+  sema_init(&p->on_exit, 0);
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  arg_copy = palloc_get_page (0);
+  if (arg_copy == NULL)
     return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (arg_copy, args, PGSIZE);
 
-  /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  char *token, *save_ptr;
+  for (token = strtok_r (arg_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)) {
+    struct argument *a = malloc(sizeof(struct argument));
+    a->value = token;
+    list_push_front(&p->args, &a->e);
+  }
+
+  p->name = (list_entry(list_back(&p->args), struct argument, e))->value;
+
+  tid = thread_create (p->name, PRI_DEFAULT, start_process, p);
+  if (tid != TID_ERROR) {
+    sema_down(&p->on_load);
+    if(!p->load_success) tid = TID_ERROR;
+
+    else {
+      p->tid = tid;
+      list_push_front
+        (&(thread_current()->childProc),
+         &p->elem);
+    }
+  }
+
+  if (tid == TID_ERROR) free(p);
+  
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+start_process (void *a)
 {
-  char *file_name = file_name_;
+  struct process *p = (struct process*)a;
   struct intr_frame if_;
   bool success;
 
@@ -59,12 +89,17 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (p, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
+  if (!success) {
+    p->load_success = false;
+    sema_up(&p->on_load);
     thread_exit ();
+  }
+
+  p->load_success = true;
+  sema_up(&p->on_load);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -88,10 +123,24 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  // Temp
-  while(1){}
+  struct list_elem *e;
+  struct list *active_child_processes = &thread_current()->childProc;
 
-  return -1;
+  for (e = list_begin (active_child_processes); e != list_end (active_child_processes); e = list_next (e)) {
+      struct process *p = list_entry (e, struct process, elem);
+
+      if(p->tid == child_tid) {
+        sema_down(&p->on_exit);
+        list_remove(&p->elem);
+
+        int exit_status = p->exit_status;
+        free(p);
+
+        return exit_status;
+      }
+    }
+
+  return (-1);
 }
 
 /* Free the current process's resources. */
