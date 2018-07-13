@@ -6,7 +6,7 @@
 
 struct argument {
   char *value;
-  struct list_elem e;
+  struct list_elem elem;
 };
 
 struct process {

@@ -21,7 +21,7 @@
 #include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
-static bool load (struct process *p, void (**eip) (void), void **esp);
+static bool load (struct process *p, void (**eip) (void), void **esp) ; 
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -37,7 +37,7 @@ process_execute (const char *args)
   // TODO
   struct process *p = malloc(sizeof(struct process));
   list_init(&p->args);
-  
+
   sema_init(&p->on_load, 0);
   sema_init(&p->on_exit, 0);
 
@@ -52,10 +52,10 @@ process_execute (const char *args)
   for (token = strtok_r (arg_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)) {
     struct argument *a = malloc(sizeof(struct argument));
     a->value = token;
-    list_push_front(&p->args, &a->e);
+    list_push_front(&p->args, &a->elem);
   }
 
-  p->name = (list_entry(list_back(&p->args), struct argument, e))->value;
+  p->name = (list_entry(list_back(&p->args), struct argument, elem))->value;
 
   tid = thread_create (p->name, PRI_DEFAULT, start_process, p);
   if (tid != TID_ERROR) {
@@ -247,7 +247,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, struct process *p) ;
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -258,7 +258,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (struct process *p, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -274,10 +274,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (p->name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", p->name);
       goto done; 
     }
 
@@ -290,7 +290,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
+      printf ("load: %s: error loading executable\n", p->name);
       goto done; 
     }
 
@@ -354,7 +354,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, p))
     goto done;
 
   /* Start address. */
@@ -479,25 +479,58 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, struct process *p) 
 {
   uint8_t *kpage;
   bool success = false;
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
-  if (kpage != NULL) 
-    {
+
+  if (kpage != NULL) {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE - 12;
-        /*
-        Temp for arg passing
-        *esp = PHYS_BASE;
-        */
-      else
-        palloc_free_page (kpage);
+      if (success) {
+        char *stack = (char*)ROUND_DOWN((int)kpage + PGSIZE, sizeof(char*));
+        char *stack_bottom = (char*)(kpage + PGSIZE);
+        int argc = list_size(&p->args);
+        int i = 0;
+        void **arg_pointers = malloc(sizeof(void*) * argc);
+        
+        struct list_elem *e;
+        for (e = list_begin (&p->args); e != list_end (&p->args); e = list_next (e)) {
+          struct argument *a = list_entry (e, struct argument, elem);
+
+          size_t arg_size = strlen(a->value) + 1;
+          stack -= arg_size;
+          strlcpy(stack, a->value, arg_size);
+          arg_pointers[i] = PHYS_BASE - (stack_bottom - stack);
+          i++;
+        }
+
+        stack = (char*)ROUND_DOWN((int)stack, sizeof(char*));
+        stack -= sizeof(void*);
+        memset(stack, 0, sizeof(void*));
+
+        for(int i = 0; i < argc; i++) {
+          stack -= sizeof(char*);
+          memcpy(stack, &arg_pointers[i], sizeof(char*));
+        }
+
+        char **argv_start = PHYS_BASE - (stack_bottom - stack);
+        stack -= sizeof(char**);
+        memcpy(stack, &argv_start, sizeof(char**));
+
+        stack -= sizeof(int);
+        memcpy(stack, &argc, sizeof(int));
+
+        stack -= sizeof(void*);
+        memset(stack, 0, sizeof(void*));
+
+        *esp = PHYS_BASE - (stack_bottom - stack);
+      }
+      else palloc_free_page (kpage);
     }
-  return success;
+
+  return (success);
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel
