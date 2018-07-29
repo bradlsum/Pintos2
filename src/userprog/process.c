@@ -21,7 +21,7 @@
 #include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
-static bool load (struct process *p, void (**eip) (void), void **esp) ; 
+static bool load (struct process *p, void (**eip) (void), void **esp); 
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -44,8 +44,9 @@ process_execute (const char *args)
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   arg_copy = palloc_get_page (0);
-  if (arg_copy == NULL)
-    return TID_ERROR;
+
+  if (arg_copy == NULL) return TID_ERROR;
+
   strlcpy (arg_copy, args, PGSIZE);
 
   char *token, *save_ptr;
@@ -70,7 +71,10 @@ process_execute (const char *args)
     }
   }
 
-  if (tid == TID_ERROR) free(p);
+  if (tid == TID_ERROR) {
+    palloc_free_page (arg_copy);
+    free(p);
+  }
   
   return tid;
 }
@@ -92,6 +96,8 @@ start_process (void *a)
   success = load (p, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
+  palloc_free_page(p->name);
+
   if (!success) {
     p->load_success = false;
     sema_up(&p->on_load);
