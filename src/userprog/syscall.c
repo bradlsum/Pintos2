@@ -7,14 +7,17 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h"
+#include "filesys/filesys.h"
 #include "devices/shutdown.h"
 
 static void syscall_handler (struct intr_frame *);
+static struct lock fileLock;
 
 void
-syscall_init (void) 
-{
+syscall_init (void) {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+
+  lock_init(&fileLock);
 }
 
 static bool check (const void *uaddr) {
@@ -61,9 +64,7 @@ static int write (int arg0, int arg1, int arg2)
     putbuf(buffer, length);
     return length;
   }
-  else {
-    return 0;
-  }
+  else return 0; 
 }
 
 static int halt(int arg0 , int arg1 , int arg2 )
@@ -83,14 +84,11 @@ static int exit (int arg0, int arg1 , int arg2 )
 
 static int exec (int arg0, int arg1 , int arg2 )
 { 
-  const char *args = (const char*)arg0;
+  const char *a = (const char*)arg0;
 
-  for(int i = 0; check(args+i); i++)
-  {
-    if(args[i] == '\0')
-      return process_execute(args);
-  }
-  return exit(-1, 0, 0);
+  if(!verify_string(a)) sys_exit(-1, 0, 0);
+  
+  return process_execute(a);
 }
 
 static int wait (int arg0, int arg1 , int arg2 )
