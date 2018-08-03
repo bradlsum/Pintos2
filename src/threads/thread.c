@@ -466,6 +466,7 @@ init_thread (struct thread *t, const char *name, int priority, void *aux)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
   list_init(&t->childProc);
+  list_init(&t->descriptors);
   t->p = (struct process *)aux;
 
   old_level = intr_disable ();

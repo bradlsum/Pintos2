@@ -7,16 +7,16 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/synch.h"
-#include "filesys/filesys.h"
 #include "devices/shutdown.h"
+#include "filesys/filesys.h"
+#include "threads/malloc.h"
 
 static void syscall_handler (struct intr_frame *);
 static struct lock fileLock;
 
-void
-syscall_init (void) {
+void syscall_init(void) 
+{
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-
   lock_init(&fileLock);
 }
 
@@ -54,6 +54,22 @@ static bool getData (void *dst, const void *usrc, size_t size)
   return true;
 }
 
+static bool verify(const char* s)
+{
+  for(int i = 0; check(s+i); i++) {
+    if(s[i] == '\0') return true;
+  }
+
+  return false;
+}
+
+static int fd = 2;
+struct fileOpen {
+  int fd;
+  struct file* f;
+  struct list_elem elem;
+};
+
 static int write (int arg0, int arg1, int arg2)
 {
   int fd = arg0;
@@ -64,7 +80,9 @@ static int write (int arg0, int arg1, int arg2)
     putbuf(buffer, length);
     return length;
   }
-  else return 0; 
+  else {
+    return 0;
+  }
 }
 
 static int halt(int arg0 , int arg1 , int arg2 )
@@ -84,11 +102,14 @@ static int exit (int arg0, int arg1 , int arg2 )
 
 static int exec (int arg0, int arg1 , int arg2 )
 { 
-  const char *a = (const char*)arg0;
+  const char *args = (const char*)arg0;
 
-  if(!verify_string(a)) sys_exit(-1, 0, 0);
-  
-  return process_execute(a);
+  for(int i = 0; check(args+i); i++)
+  {
+    if(args[i] == '\0')
+      return process_execute(args);
+  }
+  return exit(-1, 0, 0);
 }
 
 static int wait (int arg0, int arg1 , int arg2 )
@@ -100,10 +121,17 @@ static int wait (int arg0, int arg1 , int arg2 )
 
 static int create (int arg0, int arg1, int arg2 )
 { 
-   const char *file = (const char*)arg0;
-   unsigned initial_size = (unsigned)arg1;
+  const char *file = (const char*)arg0;
+  unsigned initSize = (unsigned)arg1;
+  bool success = false;
 
-  return 0; 
+  if(file == NULL || !verify(file)) exit(-1, 0, 0);
+
+  lock_acquire(&fileLock);
+  success = filesys_create(file, initSize);
+  lock_release(&fileLock);
+
+return (success); 
 }
 
 static int remove (int arg0, int arg1 , int arg2 )
@@ -115,9 +143,20 @@ static int remove (int arg0, int arg1 , int arg2 )
 
 static int open (int arg0, int arg1 , int arg2 )
 { 
-   const char *file = (const char *)arg0;
+  const char *file = (const char *)arg0;
+  struct file *f;
+  struct fileOpen *opened = malloc(sizeof(struct fileOpen));
 
-  return 0; 
+  if(file == NULL || !verify(file)) exit(-1, 0, 0);
+  lock_acquire(&fileLock);
+  if(!(f = filesys_open(file))) return -1;
+  lock_release(&fileLock);
+
+  opened->f = f;
+  opened->fd = fd++;
+  list_push_back(&thread_current()->descriptors, &opened->elem);
+  
+  return opened->fd;  
 }
 
 static int filesize (int arg0, int arg1 , int arg2 )
