@@ -32,12 +32,10 @@ process_execute (const char *args)
 {
   char *arg_copy;
   tid_t tid;
-
-  // Make a copy of FILE_NAME.
-  // TODO
   struct process *p = malloc(sizeof(struct process));
-  list_init(&p->args);
+  char *token, *save_ptr;
 
+  list_init(&p->args);
   sema_init(&p->on_load, 0);
   sema_init(&p->on_exit, 0);
 
@@ -49,7 +47,7 @@ process_execute (const char *args)
 
   strlcpy (arg_copy, args, PGSIZE);
 
-  char *token, *save_ptr;
+
   for (token = strtok_r (arg_copy, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)) {
     struct argument *a = malloc(sizeof(struct argument));
     a->value = token;
@@ -65,9 +63,7 @@ process_execute (const char *args)
 
     else {
       p->tid = tid;
-      list_push_front
-        (&(thread_current()->childProc),
-         &p->elem);
+      list_push_front(&(thread_current()->childProc),&p->elem);
     }
   }
 
